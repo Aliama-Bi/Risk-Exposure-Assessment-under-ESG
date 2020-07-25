@@ -1,0 +1,297 @@
+---
+title: "carbon price prediction"
+author: "xibi6298"""
+date: "2020年2月4日"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## package import
+```{r message=FALSE,warning=FALSE}
+library(tidyverse) # Data manipulation
+library(readr)     # Data loading
+library(GGally)    # Nice looking pair plots
+library(qtlcharts) # Interactive correlation matrix
+library(broom)     # Extracting regression results
+library(sjPlot)    # Nicely formatted tables for linear models
+library(leaps)     # Exhaustive model selection
+library(gridExtra) # Aligning figures in a grid
+library(mplot)     # Methods for model stability
+library(ggpubr)    # Multiple plots on same page
+library(ggfortify) # Improvements to autoplot
+library(psych)     #describe the column data
+library(MASS)      #apply box-cox method for data pre-processing
+library(car)       #box-cox transform
+library(strucchange) #find breakpoints of time-series
+```
+
+## Data Loading,column name change
+```{r message=FALSE,warning=FALSE}
+data <- read_csv("EUA_and_sector.csv", 
+                 col_names = FALSE, 
+                na = c("NA", "", " ", "n/a"))
+```
+
+```{r}
+data
+```
+
+```{r}
+colnames(data) <- c("Date","EUA",
+                    "Automobile",
+                    "Banks",
+                    "Basic resources",
+                    "Chemicals",
+                    "Construction",
+                    "Consumer_and_Cyclical",
+                    "Financial_Services",
+                    "Food_and_Beverage",
+                    "Industrial",
+                    "Insurance",
+                    "Media",
+                    "Pharmaceuticals_and_Healthcare",
+                    "Retail",
+                    "Software",
+                    "Technology",
+                    "Telecom",
+                    "transport_and_logistics",
+                    "Utilities")
+data = data[-1,]
+data[,2:20] = as.data.frame(apply(data[,2:20],2,as.numeric))
+```
+
+## Data processing
+
+### Missing value check, first time
+```{r}
+data %>%
+  gather(col_name, value) %>%
+  group_by(col_name) %>%
+  tally(is.na(value))
+```
+
+```{r}
+mean = apply(data[,2:9],2,mean,na.rm=T)
+data[is.na(data$CRB),'CRB']= mean['CRB']
+data[is.na(data$COAL),'COAL']= mean['COAL']
+data_nice = data[,2:9]
+```
+### Missing value check, second time
+```{r}
+data_nice %>%
+  gather(col_name, value) %>%
+  group_by(col_name) %>%
+  tally(is.na(value))
+```
+
+## Data Description
+```{r}
+table = psych::describe(data)
+table
+table[,c(11,13)] %>% mutate(divide = skew/se)
+```
+- Normality: The distribution of EUA is moderately negatively skewed,we will consider apply log transfer to normalize this factors. CER and ELECTRICITY are moderately positively skewed, we will apply square root transfer, while CRB and Weather are approximately symmetric and we will maintain the original data. 
+- Kurtosis: CER and COAL data has kurtosis score less than 0, which means they all follow Platykurtic distribution.
+- The CRB factor is comparablly volatile. 
+
+- The skewness  of EUA price is 7 times of its se, hence we will apply
+
+### Normalization
+```{r}
+data_nice = data%>% 
+  mutate(EUA = log(EUA))
+
+data_trans <- data%>% 
+  mutate(log_EUA = log(EUA),
+         log_l_CER = log(CER),
+         log_ELEC = log(ELEC))
+data_nice = data_nice[,c(9,10,11,4,5,6,7,8)]
+data_trans = data_trans[,c(1,10,11,12,5,6,7,8,9)]
+```
+
+### pairwise data exploration
+
+Some basic pairwise data exploration was conducted before the multiple regression, so as to identify the nature of the relationships between the predictor variables and the median house price.
+```{r Transformed pair plots, message = FALSE,warning=FALSE,fig.align = "center", fig.width = 30, fig.height = 30}
+
+ggpairs(data_nice,title = "Pairwise plots for variables in the Boston housing dataset") +
+  theme(plot.title = element_text(hjust = 0.5,
+                                  face = "bold",
+                                  size = 50),
+        panel.border = element_rect(fill = NA))
+ 
+```
+
+## B-P test (later use eviews complete this part)
+```{r message=FALSE,warning=FALSE}
+#try BP test
+library("xts")
+library("tseries")
+timeseries = ts(data = data_trans[,2], start = c(2018,1,2), end = c(2020,1,31), frequency = 365)
+datatime = as.matrix(data_trans)
+#tsday = xts(as.numeric(datatime[,-1]),order.by=as.Date(datatime[,1], "%Y/%m/%d"))
+eua = xts(as.numeric(datatime[,2]),order.by=as.Date(datatime[,1], "%Y/%m/%d"))
+bp_ts <- breakpoints(eua ~ 1)
+summary(bp_ts) 
+```
+
+Let's evaluate the result of the given period(01/01/2013 to present) to see what happens.
+The first breakpoints happened aroud the end of may 2018, which experiecnce…
+The second breakpoints happened aroud the start of December2018
+Comsider that the breakpoints happened before the semi-anual report released, we assume the breakpoint is not caused by that but the event correlated with carbon price. 
+
+### sub-sample correlation analysis
+
+As breakpoints have significant influence on correlation analysis, we will implement mutiple-regression to this three subsets.
+
+### correlation matrix and pairwise plot
+
+#### corrlation plot function
+```{r}
+corr_plot <- function(data) {
+  
+  data = data[-1,]
+  data[,2:11] = as.data.frame(apply(data[,2:11],2,as.numeric))
+  data = data%>% 
+  mutate(EUA = log(EUA))
+  plot = ggcorr(data, label = TRUE, hjust = 0.95, layout.exp = 3,
+       nbreaks = 4,
+       palette = "PuOr",
+       label_color = "white") +
+  labs(title = "Correlation matrix of carbon price data variables") +
+  theme(plot.title = element_text(hjust = 0.5,
+                                  face = "bold"))
+  return(plot)
+}
+```
+
+#### pairwise plot function
+```{r Pair plots (specific), message = FALSE, fig.align = "center", fig.width = 14, fig.height = 10}
+pair_plot <- function(data) {
+  data_nice = as.data.frame(apply(data,2,as.numeric))
+  plot = data_nice %>% mutate(EUA = log(EUA)) %>%
+                   pivot_longer(-EUA,
+                      names_to = "variable",
+                      values_to = "value") %>% 
+  ggplot(aes(x = value, y = EUA)) +
+  geom_point(colour = "midnightblue") +
+  geom_smooth(method = "lm", se=FALSE, color="black", formula = y ~ x) +
+  facet_wrap(~variable, scales = "free") +
+  labs(title = "Scatter plots of EUA against sector price",
+       x = "",
+       caption = "Source: investing.com and bloomberg") +
+  theme(plot.title = element_text(size=16, hjust = 0.5, face = "bold"))
+  return(plot)
+}
+```
+
+#### 2018/5
+```{r fig.width=13,fig.height=13}
+data2 <- read_csv("2018.5.8(new).csv", 
+                 col_names = FALSE, 
+                na = c("NA", "", " ", "n/a"))
+colnames(data2) <- c("Date","EUA","Industrial","Chemicals","Banks","Utilities","Telecom","Technology","Retail","Financial_Services","Basic resources")
+corr_plot(data2)
+```
+
+#### 2018/12
+```{r fig.width=13,fig.height=13}
+data3 <- read_csv("2018.12.13(new).csv", 
+                 col_names = FALSE, 
+                na = c("NA", "", " ", "n/a"))
+colnames(data3) <- c("Date","EUA","Industrial","Chemicals","Banks","Utilities","Telecom","Technology","Retail","Financial_Services","Basic resources")
+corr_plot(data3)
+```
+
+#### 2020
+```{r fig.width=13,fig.height=13}
+data4 <- read_csv("2018.12.14(new).csv", 
+                 col_names = FALSE, 
+                na = c("NA", "", " ", "n/a"))
+colnames(data4) <- c("Date","EUA","Industrial","Chemicals","Banks","Utilities","Telecom","Technology","Retail","Financial_Services","Basic resources")
+corr_plot(data4)
+```
+
+We find that, the correlation matrixs show pretty different results within three periods:
+- in the first period, carbon price has positive effect with most of industry
+
+- However, in the second period, with carbon price significantly grows up, industrial, chemicals, banks, telecom, technology, retail and basic resources sectors shows negative correlation with carbon price movement, amoung thouse sectors, industrial, chemistry, banks and retail were significantly negatively influenced by the increase of carbon price. 
+
+```{r Pair plots (specific), message = FALSE, warning=FALSE, fig.align = "center", fig.width = 9, fig.height = 6}
+pair_plot(data3[,c(2,3,4,5,9)])
+```
+
+【或许可用的描述型语句】
+It can be seen from the matrix that the CRB is strongly negatively correlated with the log_EUA. This makes sense, as poorer people are only able to afford low-cost housing. Furthermore, strong positive correlation is seen between highway access and log tax rate, as well as between highway access and log crime rate. However, when looking at the respective pairwise plots, it seems that this high correlation is caused by a few outliers. Hence, these variables were kept for use in the multiple regression as the evidence of high correlation was not particularly strong. Moderately correlated predictor variables included:
+
+- Nitrous oxide concentration and employment centre distance
+- Nitrous oxide concentration and log crime rate
+- Non-retail proportion and nitrous oxide concentration
+
+### original model
+```{r}
+M1 <- lm(log_EUA ~ ., data = data_nice) # Fitting the full model
+round(summary(M1)$coef, 3) 
+```
+
+
+
+############ 或许用不到以下部分
+### 需要几阶拆分
+```{r}
+library("forecast")
+ndiffs(timeseries)
+pacf(timeseries)
+```
+
+### ADF test
+```{r}
+eua = xts(as.numeric(datatime[,2]),order.by=as.Date(datatime[,1], "%Y/%m/%d"))
+adf.test(eua)
+adf.test(diff(eua)[-1,])
+cer = xts(as.numeric(datatime[,3]),order.by=as.Date(datatime[,1], "%Y/%m/%d"))
+adf.test(cer)
+adf.test(diff(cer)[-1,])
+elec = xts(as.numeric(datatime[,4]),order.by=as.Date(datatime[,1], "%Y/%m/%d"))
+adf.test(elec)
+adf.test(diff(elec)[-1,])
+crb = xts(as.numeric(datatime[,5]),order.by=as.Date(datatime[,1], "%Y/%m/%d"))
+adf.test(crb)
+adf.test(diff(crb)[-1,])
+oil = xts(as.numeric(datatime[,6]),order.by=as.Date(datatime[,1], "%Y/%m/%d"))
+adf.test(oil)
+adf.test(diff(oil)[-1,])
+gas = xts(as.numeric(datatime[,7]),order.by=as.Date(datatime[,1], "%Y/%m/%d"))
+adf.test(gas)
+adf.test(diff(gas)[-1,])
+coal = xts(as.numeric(datatime[,8]),order.by=as.Date(datatime[,1], "%Y/%m/%d"))
+adf.test(coal)
+adf.test(diff(coal)[-1,])
+weather = xts(as.numeric(datatime[,9]),order.by=as.Date(datatime[,1], "%Y/%m/%d"))
+adf.test(weather)
+adf.test(diff(weather)[-1,])
+```
+
+From ADF result, we can see ADF test to all factors under feasible region are not significant, hence those factor can be used in later ARMA regression. 
+
+```{r}
+acf(timeseries)
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
