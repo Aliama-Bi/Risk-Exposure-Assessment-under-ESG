@@ -1,4 +1,4 @@
-# Schroders Portofolio Risk Exposure Assessment under ESG criteria
+# Risk Exposure Assessment on Schroder Australia’s Portfolio Composition
 
 Researched on 'Risk Exposure Assessment on Schroders Australia's Portfolio Composition' under a worldwide carbon emissions trading scheme. Collected data via Bloomberg Terminal, carried out Data Collection, Data Processing, and Data Analysis
 
